@@ -42,3 +42,10 @@ node_modules
 # pixi environments
 .pixi
 *.egg-info
+
+# Rust / Cargo
+/target
+
+# Benchmark generated data and results
+benches/data/
+benches/results/
