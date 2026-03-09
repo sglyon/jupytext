@@ -1,0 +1,27 @@
+[workspace]
+members = ["cargo:."]
+
+[dist]
+# Target platforms
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+
+# Installers to generate
+installers = ["shell", "powershell", "homebrew"]
+
+# Homebrew tap repository
+tap = "sglyon/homebrew-tap"
+
+# CI backend
+ci = "github"
+
+# Build in release mode
+cargo-dist-version = "0.27.0"
+
+# Enable update notifications
+install-updater = false

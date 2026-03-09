@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Convert Jupyter notebooks to/from text formats (Rust implementation)"
 license = "MIT"
+repository = "https://github.com/sglyon/jupytext"
+homepage = "https://github.com/sglyon/jupytext"
+readme = "README.md"
+keywords = ["jupyter", "notebook", "markdown", "python", "conversion"]
+categories = ["command-line-utilities", "text-processing"]
 
 [[bin]]
 name = "jupytext"
