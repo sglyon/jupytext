@@ -190,10 +190,8 @@ impl TextNotebookConverter {
                 )));
             }
             Some(name) if name == MYST_FORMAT_NAME => {
-                return Err(JupytextError::Other(
-                    "The 'myst' format requires an external converter not yet implemented in Rust."
-                        .to_string(),
-                ));
+                return crate::myst::myst_to_notebook(text)
+                    .map_err(JupytextError::Other);
             }
             _ => {}
         }
@@ -426,10 +424,8 @@ impl TextNotebookConverter {
                 )));
             }
             Some(name) if name == MYST_FORMAT_NAME => {
-                return Err(JupytextError::Other(
-                    "The 'myst' format requires an external converter not yet implemented in Rust."
-                        .to_string(),
-                ));
+                let filtered = self.filter_notebook(nb);
+                return Ok(crate::myst::notebook_to_myst(&filtered));
             }
             _ => {}
         }

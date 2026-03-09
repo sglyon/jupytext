@@ -9,6 +9,7 @@ pub mod header;
 pub mod cell_reader;
 pub mod cell_to_text;
 pub mod formats;
+pub mod myst;
 pub mod jupytext;
 pub mod config;
 pub mod paired_paths;

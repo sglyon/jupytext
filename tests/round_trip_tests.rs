@@ -1368,3 +1368,424 @@ fn test_ipynb_unicode_content() {
     let nb2 = reads(&text, Some("ipynb")).unwrap();
     assert_eq!(nb2.cells[0].source, nb.cells[0].source);
 }
+
+// =========================================================================
+// MyST format tests
+// Ported from tests/functional/simple_notebooks/test_ipynb_to_myst.py
+// and tests/functional/round_trip/test_mirror.py
+// =========================================================================
+
+/// Helper: read a test data file relative to the project root
+fn read_test_file(path: &str) -> String {
+    let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let full_path = project_root.join(path);
+    std::fs::read_to_string(&full_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", full_path.display(), e))
+}
+
+// -- test_ipynb_to_myst.py: test_bad_notebook_metadata --
+#[test]
+fn test_myst_bad_notebook_metadata() {
+    // Invalid YAML in front matter — our parser is lenient
+    // and returns empty metadata rather than erroring (unlike Python
+    // which uses markdown-it and raises MystMetadataParsingError)
+    let text = "---\n{{a\n---\n";
+    let result = reads(text, Some("md:myst"));
+    assert!(result.is_ok());
+}
+
+// -- test_ipynb_to_myst.py: test_bad_code_metadata --
+#[test]
+fn test_myst_bad_code_metadata() {
+    // Invalid YAML in code cell metadata should still parse the cell
+    let text = "```{code-cell}\n---\n{{a\n---\n```\n";
+    let result = reads(text, Some("md:myst"));
+    assert!(result.is_ok());
+    let nb = result.unwrap();
+    assert_eq!(nb.cells.len(), 1);
+    assert_eq!(nb.cells[0].cell_type, CellType::Code);
+}
+
+// -- test_ipynb_to_myst.py: test_matches_mystnb (partial) --
+#[test]
+fn test_myst_reads_with_code_directive() {
+    let text = "```{code-cell}\n1 + 1\n```\n";
+    let nb = reads(text, Some("md:myst")).unwrap();
+    assert_eq!(nb.cells.len(), 1);
+    assert_eq!(nb.cells[0].cell_type, CellType::Code);
+    assert_eq!(nb.cells[0].source, "1 + 1");
+}
+
+// -- Simple MyST document with front matter and code cells --
+#[test]
+fn test_myst_reads_simple_document() {
+    let text = r#"---
+kernelspec:
+  display_name: Python 3
+  language: python
+  name: python3
+---
+
+# Jupyter notebook
+
+This notebook is simple.
+
+```{code-cell} ipython3
+a = 1
+b = 2
+a + b
+```
+
+Now we return a few tuples
+
+```{code-cell} ipython3
+a, b
+```
+
+```{code-cell} ipython3
+a, b, a+b
+```
+
+And this is already the end of the notebook
+"#;
+
+    let nb = reads(text, Some("md:myst")).unwrap();
+
+    // Should have kernelspec in metadata
+    assert!(nb.metadata.contains_key("kernelspec"));
+
+    // Should have 6 cells: md, code, md, code, code, md
+    assert_eq!(nb.cells.len(), 6);
+    assert_eq!(nb.cells[0].cell_type, CellType::Markdown);
+    assert!(nb.cells[0].source.contains("# Jupyter notebook"));
+    assert_eq!(nb.cells[1].cell_type, CellType::Code);
+    assert_eq!(nb.cells[1].source, "a = 1\nb = 2\na + b");
+    assert_eq!(nb.cells[2].cell_type, CellType::Markdown);
+    assert!(nb.cells[2].source.contains("Now we return"));
+    assert_eq!(nb.cells[3].cell_type, CellType::Code);
+    assert_eq!(nb.cells[3].source, "a, b");
+    assert_eq!(nb.cells[4].cell_type, CellType::Code);
+    assert_eq!(nb.cells[4].source, "a, b, a+b");
+    assert_eq!(nb.cells[5].cell_type, CellType::Markdown);
+    assert!(nb.cells[5].source.contains("end of the notebook"));
+}
+
+// -- test_mirror.py: test_ipynb_to_myst (using reference files) --
+#[test]
+fn test_myst_mirror_jupyter_ipynb_to_myst() {
+    let expected_myst = read_test_file("tests/data/notebooks/outputs/ipynb_to_myst/jupyter.md");
+    let nb = reads(&expected_myst, Some("md:myst")).unwrap();
+
+    assert!(nb.metadata.contains_key("kernelspec"));
+    assert_eq!(nb.cells.len(), 6);
+
+    assert_eq!(nb.cells[0].cell_type, CellType::Markdown);
+    assert_eq!(nb.cells[1].cell_type, CellType::Code);
+    assert_eq!(nb.cells[2].cell_type, CellType::Markdown);
+    assert_eq!(nb.cells[3].cell_type, CellType::Code);
+    assert_eq!(nb.cells[4].cell_type, CellType::Code);
+    assert_eq!(nb.cells[5].cell_type, CellType::Markdown);
+
+    assert_eq!(nb.cells[1].source, "a = 1\nb = 2\na + b");
+    assert_eq!(nb.cells[3].source, "a, b");
+    assert_eq!(nb.cells[4].source, "a, b, a+b");
+}
+
+// -- test_mirror.py: test_myst_to_ipynb (reference file round trip) --
+#[test]
+fn test_myst_mirror_fenced_code_vs_code_cells() {
+    let myst_text = read_test_file("tests/data/notebooks/inputs/myst/fenced_code_vs_code_cells.md");
+    let nb = reads(&myst_text, Some("md:myst")).unwrap();
+
+    // Should have 2 cells: one markdown (containing fenced code blocks) and one code cell
+    assert_eq!(nb.cells.len(), 2);
+    assert_eq!(nb.cells[0].cell_type, CellType::Markdown);
+    assert_eq!(nb.cells[1].cell_type, CellType::Code);
+
+    // The markdown cell should contain the fenced code blocks as-is
+    assert!(nb.cells[0].source.contains("```\n# a generic code instruction"));
+    assert!(nb.cells[0].source.contains("```python\n1 + 1\n```"));
+
+    // The code cell should have the actual code
+    assert_eq!(nb.cells[1].source, "# This code gets executed in notebooks\n1 + 1");
+}
+
+#[test]
+fn test_myst_mirror_reference_link() {
+    let myst_text = read_test_file("tests/data/notebooks/inputs/myst/reference_link.md");
+    let nb = reads(&myst_text, Some("md:myst")).unwrap();
+
+    assert_eq!(nb.cells.len(), 3);
+    assert_eq!(nb.cells[0].cell_type, CellType::Markdown);
+    assert_eq!(nb.cells[1].cell_type, CellType::Code);
+    assert_eq!(nb.cells[2].cell_type, CellType::Markdown);
+
+    assert_eq!(nb.cells[1].source, "1 + 1");
+    assert!(nb.cells[2].source.contains("[reference-link to the issue]"));
+}
+
+// -- MyST block break (+++) with metadata --
+#[test]
+fn test_myst_block_break_with_metadata() {
+    let text = r#"---
+a: 1
+---
+abc
+
++++ {"tags": ["special"]}
+
+def
+
+```{code-cell}
+---
+b: 2
+---
+c = 3
+```
+
+xyz
+"#;
+    let nb = reads(text, Some("md:myst")).unwrap();
+
+    // 4 cells: md("abc"), md("def" with tags), code("c = 3"), md("xyz")
+    assert_eq!(nb.cells.len(), 4);
+
+    assert_eq!(nb.cells[0].cell_type, CellType::Markdown);
+    assert_eq!(nb.cells[0].source, "abc");
+
+    assert_eq!(nb.cells[1].cell_type, CellType::Markdown);
+    assert_eq!(nb.cells[1].source, "def");
+    assert!(nb.cells[1].metadata.contains_key("tags"));
+
+    assert_eq!(nb.cells[2].cell_type, CellType::Code);
+    assert_eq!(nb.cells[2].source, "c = 3");
+    assert!(nb.cells[2].metadata.contains_key("b"));
+
+    assert_eq!(nb.cells[3].cell_type, CellType::Markdown);
+    assert_eq!(nb.cells[3].source, "xyz");
+}
+
+#[test]
+fn test_myst_block_break_splits_markdown_cells() {
+    let text = "First cell\n\n+++\n\nSecond cell\n";
+    let nb = reads(text, Some("md:myst")).unwrap();
+
+    assert_eq!(nb.cells.len(), 2);
+    assert_eq!(nb.cells[0].source, "First cell");
+    assert_eq!(nb.cells[1].source, "Second cell");
+}
+
+// -- Raw cell support --
+#[test]
+fn test_myst_raw_cell() {
+    let text = "```{raw-cell}\n<div>raw html</div>\n```\n";
+    let nb = reads(text, Some("md:myst")).unwrap();
+    assert_eq!(nb.cells.len(), 1);
+    assert_eq!(nb.cells[0].cell_type, CellType::Raw);
+    assert!(nb.cells[0].source.contains("<div>raw html</div>"));
+}
+
+// -- Code cell with compact metadata (:key: value) --
+#[test]
+fn test_myst_code_cell_compact_metadata() {
+    let text = "```{code-cell} python3\n:tags: [hide-output]\n\nprint('hello')\n```\n";
+    let nb = reads(text, Some("md:myst")).unwrap();
+    assert_eq!(nb.cells.len(), 1);
+    assert_eq!(nb.cells[0].cell_type, CellType::Code);
+    assert!(nb.cells[0].metadata.contains_key("tags"));
+    assert_eq!(nb.cells[0].source, "print('hello')");
+}
+
+// -- Code cell with YAML block metadata --
+#[test]
+fn test_myst_code_cell_yaml_block_metadata() {
+    let text = "```{code-cell} python3\n---\ntags: [hide-output]\nlines_to_next_cell: 2\n---\n\nprint('hello')\n```\n";
+    let nb = reads(text, Some("md:myst")).unwrap();
+    assert_eq!(nb.cells.len(), 1);
+    assert_eq!(nb.cells[0].cell_type, CellType::Code);
+    assert!(nb.cells[0].metadata.contains_key("tags"));
+    assert!(nb.cells[0].metadata.contains_key("lines_to_next_cell"));
+    assert_eq!(nb.cells[0].source, "print('hello')");
+}
+
+// -- Fenced code blocks inside markdown (not code cells) --
+#[test]
+fn test_myst_fenced_code_in_markdown_not_code_cell() {
+    let text = "# Title\n\n```python\nx = 1\n```\n\nMore text\n";
+    let nb = reads(text, Some("md:myst")).unwrap();
+
+    // Regular fenced code blocks (without {code-cell}) should stay as markdown
+    assert_eq!(nb.cells.len(), 1);
+    assert_eq!(nb.cells[0].cell_type, CellType::Markdown);
+    assert!(nb.cells[0].source.contains("```python"));
+}
+
+// -- More backticks for code containing triple backticks --
+#[test]
+fn test_myst_more_backticks() {
+    let text = "````{code-cell}\ncode with ``` in it\n````\n";
+    let nb = reads(text, Some("md:myst")).unwrap();
+    assert_eq!(nb.cells.len(), 1);
+    assert_eq!(nb.cells[0].cell_type, CellType::Code);
+    assert_eq!(nb.cells[0].source, "code with ``` in it");
+}
+
+// -- Round-trip: notebook → myst → notebook --
+#[test]
+fn test_myst_round_trip_via_public_api() {
+    let mut nb = Notebook::new();
+    nb.metadata.insert(
+        "kernelspec".to_string(),
+        serde_json::json!({
+            "display_name": "Python 3",
+            "language": "python",
+            "name": "python3"
+        }),
+    );
+    nb.metadata.insert(
+        "language_info".to_string(),
+        serde_json::json!({
+            "name": "python",
+            "pygments_lexer": "ipython3"
+        }),
+    );
+    nb.cells.push(Cell::new_markdown("# My notebook\n\nSome text."));
+    nb.cells.push(Cell::new_code("x = 1\nprint(x)"));
+    nb.cells.push(Cell::new_markdown("More text here."));
+    nb.cells.push(Cell::new_code("y = 2"));
+
+    let myst_text = writes(&nb, "md:myst").unwrap();
+
+    assert!(myst_text.contains("---\n"));
+    assert!(myst_text.contains("kernelspec"));
+    assert!(myst_text.contains("```{code-cell} ipython3"));
+    assert!(myst_text.contains("x = 1"));
+
+    let nb2 = reads(&myst_text, Some("md:myst")).unwrap();
+    assert_eq!(nb2.cells.len(), nb.cells.len());
+
+    for (orig, read_back) in nb.cells.iter().zip(nb2.cells.iter()) {
+        assert_eq!(orig.cell_type, read_back.cell_type);
+        assert_eq!(orig.source, read_back.source,
+            "Source mismatch for {:?} cell", orig.cell_type);
+    }
+}
+
+// -- test_myst_representation_same_cli_or_contents_manager (lexer handling) --
+#[test]
+fn test_myst_writes_with_pygments_lexer() {
+    let mut nb = Notebook::new();
+    nb.metadata.insert(
+        "language_info".to_string(),
+        serde_json::json!({
+            "name": "python",
+            "pygments_lexer": "ipython3"
+        }),
+    );
+    nb.cells.push(Cell::new_code("1 + 1"));
+
+    let text = writes(&nb, "md:myst").unwrap();
+    assert!(text.contains("```{code-cell} ipython3"),
+        "Expected code-cell with ipython3 lexer, got:\n{}", text);
+}
+
+#[test]
+fn test_myst_writes_without_pygments_lexer() {
+    let mut nb = Notebook::new();
+    nb.cells.push(Cell::new_code("1 + 1"));
+
+    let text = writes(&nb, "md:myst").unwrap();
+    // Without language_info, code-cell should not have a lexer suffix
+    assert!(!text.contains("```{code-cell} ipython3"),
+        "Should not have ipython3 lexer without language_info:\n{}", text);
+}
+
+// -- Empty notebook --
+#[test]
+fn test_myst_empty_notebook() {
+    let nb = Notebook::new();
+    let text = writes(&nb, "md:myst").unwrap();
+    assert!(!text.is_empty());
+}
+
+// -- Multiple consecutive markdown cells need +++ separator --
+#[test]
+fn test_myst_consecutive_markdown_cells() {
+    let mut nb = Notebook::new();
+    nb.cells.push(Cell::new_markdown("First cell"));
+    nb.cells.push(Cell::new_markdown("Second cell"));
+    nb.cells.push(Cell::new_markdown("Third cell"));
+
+    let text = writes(&nb, "md:myst").unwrap();
+    assert!(text.contains("+++"),
+        "Expected +++ separator between consecutive markdown cells:\n{}", text);
+
+    let nb2 = reads(&text, Some("md:myst")).unwrap();
+    assert_eq!(nb2.cells.len(), 3);
+    assert_eq!(nb2.cells[0].source, "First cell");
+    assert_eq!(nb2.cells[1].source, "Second cell");
+    assert_eq!(nb2.cells[2].source, "Third cell");
+}
+
+// -- Code cell with content starting with --- --
+#[test]
+fn test_myst_code_cell_source_starts_with_dashes() {
+    let mut nb = Notebook::new();
+    nb.cells.push(Cell::new_code("---\nprint('not yaml')"));
+
+    let text = writes(&nb, "md:myst").unwrap();
+    let nb2 = reads(&text, Some("md:myst")).unwrap();
+    assert_eq!(nb2.cells.len(), 1);
+    assert_eq!(nb2.cells[0].cell_type, CellType::Code);
+}
+
+// -- Mirror tests: read ipynb_to_myst reference outputs --
+#[test]
+fn test_myst_mirror_frozen_cell() {
+    let myst = read_test_file("tests/data/notebooks/outputs/ipynb_to_myst/frozen_cell.md");
+    let nb = reads(&myst, Some("md:myst")).unwrap();
+    assert!(!nb.cells.is_empty());
+    let code_cells: Vec<_> = nb.cells.iter().filter(|c| c.cell_type == CellType::Code).collect();
+    assert!(!code_cells.is_empty());
+}
+
+#[test]
+fn test_myst_mirror_plotly_graphs() {
+    let myst = read_test_file("tests/data/notebooks/outputs/ipynb_to_myst/plotly_graphs.md");
+    let nb = reads(&myst, Some("md:myst")).unwrap();
+    assert!(!nb.cells.is_empty());
+    assert!(nb.metadata.contains_key("kernelspec") || nb.metadata.contains_key("jupytext"));
+}
+
+#[test]
+fn test_myst_mirror_notebook_with_complex_metadata() {
+    let myst = read_test_file("tests/data/notebooks/outputs/ipynb_to_myst/notebook_with_complex_metadata.md");
+    let nb = reads(&myst, Some("md:myst")).unwrap();
+    assert!(!nb.cells.is_empty());
+    // The "complex metadata" is notebook-level (kernelspec), not cell-level
+    assert!(nb.metadata.contains_key("kernelspec"), "notebook should have kernelspec metadata");
+}
+
+// -- Demo file round-trip --
+#[test]
+fn test_myst_demo_world_population() {
+    let myst = read_test_file("demo/World population.myst.md");
+    let nb = reads(&myst, Some("md:myst")).unwrap();
+
+    assert!(nb.cells.len() > 10, "World population demo should have many cells, got {}", nb.cells.len());
+
+    let md_count = nb.cells.iter().filter(|c| c.cell_type == CellType::Markdown).count();
+    let code_count = nb.cells.iter().filter(|c| c.cell_type == CellType::Code).count();
+    assert!(md_count > 0);
+    assert!(code_count > 0);
+
+    // Round-trip
+    let text = writes(&nb, "md:myst").unwrap();
+    let nb2 = reads(&text, Some("md:myst")).unwrap();
+    assert_eq!(nb2.cells.len(), nb.cells.len());
+
+    for (i, (orig, rt)) in nb.cells.iter().zip(nb2.cells.iter()).enumerate() {
+        assert_eq!(orig.cell_type, rt.cell_type, "Cell {} type mismatch", i);
+        assert_eq!(orig.source, rt.source, "Cell {} source mismatch", i);
+    }
+}
