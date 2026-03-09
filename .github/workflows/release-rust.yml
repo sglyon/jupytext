@@ -1,9 +1,8 @@
-# Publish Rust binaries via cargo-dist
-# This workflow builds prebuilt binaries for multiple platforms and creates
-# a GitHub Release with shell/powershell installers and a Homebrew formula.
+# Publish Rust binaries as GitHub Releases
+# Builds prebuilt binaries for multiple platforms and creates a GitHub Release.
 #
-# NOTE: Requires creating the `sglyon/homebrew-tap` repo on GitHub (can be empty).
-# cargo-dist will push Homebrew formulas there automatically.
+# NOTE: Requires creating the `sglyon/homebrew-tap` repo on GitHub (can be empty)
+# and adding an SSH deploy key as the HOMEBREW_TAP_DEPLOY_KEY secret.
 
 name: Release (Rust binaries)
 
@@ -16,48 +15,25 @@ on:
       - 'v*'
 
 jobs:
-  # Step 1: Run cargo-dist plan to determine what to build
-  plan:
-    runs-on: ubuntu-latest
-    outputs:
-      val: ${{ steps.plan.outputs.manifest }}
-      tag: ${{ github.ref_name }}
-      tag-flag: ${{ github.ref_type == 'tag' && format('--tag={0}', github.ref_name) || '' }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Install cargo-dist
-        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/latest/download/cargo-dist-installer.sh | sh
-      - name: Run cargo-dist plan
-        id: plan
-        run: |
-          cargo dist plan ${{ github.ref_type == 'tag' && format('--tag={0}', github.ref_name) || '' }} --output-format=json > plan-dist-manifest.json
-          echo "manifest=$(jq -c '.' plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
-
-  # Step 2: Build binaries for each target
-  build-local:
+  build:
     name: "build (${{ matrix.target }})"
-    needs: plan
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-20.04
+            os: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-20.04
+            os: ubuntu-22.04
           - target: x86_64-apple-darwin
             os: macos-13
           - target: aarch64-apple-darwin
             os: macos-14
           - target: x86_64-pc-windows-msvc
-            os: windows-2019
+            os: windows-2022
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -82,7 +58,7 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/jupytext dist/
           cd dist
-          tar czf jupytext-${{ needs.plan.outputs.tag }}-${{ matrix.target }}.tar.gz jupytext
+          tar czf jupytext-${{ github.ref_name }}-${{ matrix.target }}.tar.gz jupytext
           rm jupytext
 
       - name: Package (Windows)
@@ -91,7 +67,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist
           Copy-Item "target/${{ matrix.target }}/release/jupytext.exe" "dist/"
-          Compress-Archive -Path "dist/jupytext.exe" -DestinationPath "dist/jupytext-${{ needs.plan.outputs.tag }}-${{ matrix.target }}.zip"
+          Compress-Archive -Path "dist/jupytext.exe" -DestinationPath "dist/jupytext-${{ github.ref_name }}-${{ matrix.target }}.zip"
           Remove-Item "dist/jupytext.exe"
 
       - name: Upload artifacts
@@ -100,13 +76,10 @@ jobs:
           name: dist-${{ matrix.target }}
           path: dist/*
 
-  # Step 3: Create GitHub Release with all artifacts
-  publish:
-    needs: [plan, build-local]
+  release:
+    needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -114,31 +87,21 @@ jobs:
           pattern: dist-*
           merge-multiple: true
 
-      - name: Install cargo-dist
-        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/latest/download/cargo-dist-installer.sh | sh
-
-      - name: Generate installers
-        run: |
-          cargo dist plan ${{ needs.plan.outputs.tag-flag }} --output-format=json > dist-manifest.json
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.plan.outputs.tag }}
-          name: ${{ needs.plan.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           draft: false
-          prerelease: ${{ contains(needs.plan.outputs.tag, '-rc') || contains(needs.plan.outputs.tag, '-beta') || contains(needs.plan.outputs.tag, '-alpha') }}
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
           files: dist/*
           generate_release_notes: true
 
-  # Step 4: Publish Homebrew formula
   publish-homebrew:
-    needs: [plan, publish]
+    needs: [build, release]
     runs-on: ubuntu-latest
-    if: ${{ !contains(needs.plan.outputs.tag, '-rc') && !contains(needs.plan.outputs.tag, '-beta') && !contains(needs.plan.outputs.tag, '-alpha') }}
+    if: ${{ !contains(github.ref_name, '-rc') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-alpha') }}
     steps:
-      - uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -148,17 +111,17 @@ jobs:
 
       - name: Generate Homebrew formula
         run: |
-          TAG="${{ needs.plan.outputs.tag }}"
+          TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
 
-          # Compute SHA256 for each macOS tarball
           SHA_X86=$(sha256sum dist/jupytext-${TAG}-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
           SHA_ARM=$(sha256sum dist/jupytext-${TAG}-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
           SHA_LINUX=$(sha256sum dist/jupytext-${TAG}-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
 
           REPO="https://github.com/sglyon/jupytext/releases/download/${TAG}"
 
-          cat > jupytext.rb <<FORMULA
+          mkdir -p Formula
+          cat > Formula/jupytext.rb <<FORMULA
           class Jupytext < Formula
             desc "Convert Jupyter notebooks to/from text formats"
             homepage "https://github.com/sglyon/jupytext"
@@ -195,9 +158,9 @@ jobs:
         env:
           SSH_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         with:
-          source-directory: '.'
+          source-directory: Formula
           destination-github-username: 'sglyon'
           destination-repository-name: 'homebrew-tap'
           target-branch: main
           target-directory: Formula
-          commit-message: "Update jupytext to ${{ needs.plan.outputs.tag }}"
+          commit-message: "Update jupytext to ${{ github.ref_name }}"

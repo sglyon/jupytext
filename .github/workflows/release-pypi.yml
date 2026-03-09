@@ -53,14 +53,15 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          args: --release --out dist --manifest-path pypi/pyproject.toml
+          args: --release --out dist
+          working-directory: pypi
           sccache: 'true'
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.os }}-${{ matrix.target }}
-          path: dist/*.whl
+          path: pypi/dist/*.whl
 
   build-sdist:
     name: sdist
@@ -72,13 +73,14 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --out dist --manifest-path pypi/pyproject.toml
+          args: --out dist
+          working-directory: pypi
 
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
           name: sdist
-          path: dist/*.tar.gz
+          path: pypi/dist/*.tar.gz
 
   publish:
     name: Publish to PyPI
